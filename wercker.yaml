@@ -1,0 +1,51 @@
+box: openjdk:8-jdk
+
+build:
+  steps:
+    # maven commands to compile the code
+    - wercker/maven:
+      goals: package -DskipTests
+      cache_repo: true
+      version: 3.5.2
+
+    # run sonarqube scans on the codebase
+    - script:
+        name: Execute sonarqube analyze process
+        code: |
+          mvn sonar:sonar -Dsonar.host.url=$SONAR_URL -Dsonar.login=$SONAR_USERNAME -Dsonar.password=$SONAR_PASSWORD > ./temp_output
+          SONAR_GET_REPORT_URL=`cat ./temp_output | grep "More about the report processing at " | awk -F 'at ' '{print substr($2,1)}'`
+          cat ./temp_output
+          echo $SONAR_GET_REPORT_URL
+          
+    # Copy binary to location that gets passed along to next workflow
+    - script:
+        name: copy binary
+        code: cp /pipeline/source/target/medrec-0.0.1-SNAPSHOT.jar "$WERCKER_OUTPUT_DIR"
+
+# This is a new workflow.
+push-to-registry:
+  # use a lightweight version of jre8-alpine container
+  box: openjdk:8-jre-alpine
+  steps:
+    # remove unnecessary files to reduce the size of the container
+    - script:
+        name: prune container
+        code: rm -rf /pipeline/cache | rm -rf /pipeline/output
+    
+    
+    # Push to OCI-R -
+    - internal/docker-push:
+      username: $USERNAME
+      password: $PASSWORD
+      registry: $REGISTRY
+      repository: $USERNAME/$REPOSITORY
+      entrypoint: java -jar /pipeline/source/medrec-0.0.1-SNAPSHOT.jar
+
+notify-slack:
+  steps:
+    - install-packages:
+        packages: ruby
+    - wantedly/pretty-slack-notify:
+        webhook_url: $SLACK_WEBHOOK_URL
+        passed_message: SUCCESS - Pipeline completed. $WERCKER_RUN_URL
+        failed_message: FAILURE - Pipeline completed. $WERCKER_RUN_URL
